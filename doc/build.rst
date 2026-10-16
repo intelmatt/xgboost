@@ -138,6 +138,31 @@ architectures can be found `in this page <https://developer.nvidia.com/cuda-gpus
   building XGBoost with NCCL as a shared library, while ``USE_DLOPEN_NCCL`` enables
   XGBoost to load NCCL at runtime using ``dlopen``.
 
+Building with SYCL support
+==========================
+
+The SYCL plugin (``device=sycl``) requires the `Intel oneAPI DPC++/C++ Compiler
+<https://www.intel.com/content/www/us/en/developer/tools/oneapi/dpc-compiler.html>`_ and
+CMake 3.19 or newer. Only the plugin sources are compiled by the SYCL compiler; the rest of
+XGBoost uses the regular C++ compiler.
+
+.. code-block:: bash
+
+  cmake -B build -S . -DPLUGIN_SYCL=ON -GNinja
+  cd build && ninja
+
+``SYCL_CXX_COMPILER`` selects the SYCL compiler (default ``icpx``) and ``SYCL_CXX_FLAGS`` passes
+extra flags to it only, e.g. ``--gcc-toolchain=/path/to/gcc`` when the default GCC is too old.
+The resulting library depends on the SYCL runtime (``libsycl``).
+
+``PLUGIN_SYCL`` can be combined with ``USE_CUDA`` to build a single library that supports
+``device=cpu``, ``device=cuda`` and ``device=sycl``:
+
+.. code-block:: bash
+
+  cmake -B build -S . -DUSE_CUDA=ON -DPLUGIN_SYCL=ON -GNinja
+  cd build && ninja
+
 .. _build_python:
 
 ***********************************
