@@ -1,0 +1,18 @@
+name: linux_sycl_cuda_build
+channels:
+- conda-forge
+- https://software.repos.intel.com/python/conda/
+dependencies:
+- cmake>=3.26.4
+- c-compiler
+- cxx-compiler
+- gtest
+- ninja
+- dpcpp_linux-64>=2024.2.1
+- onedpl-devel
+- intel-openmp
+- cuda-version=13
+- cuda-nvcc
+- cuda-cudart-dev
+- cuda-cudart-static
+- cuda-cccl

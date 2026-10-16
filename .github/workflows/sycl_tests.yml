@@ -37,3 +37,18 @@ jobs:
           environment-file: ops/conda_env/linux_sycl_test.yml
       - name: Build and run C++ and Python tests
         run: bash ops/pipeline/build-test-sycl.sh
+
+  gtest-cpu-sycl-cuda:
+    name: Build with CUDA and SYCL, test SYCL on the CPU
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: 'true'
+      - uses: dmlc/xgboost-devops/actions/miniforge-setup@main
+        with:
+          environment-name: linux_sycl_cuda_build
+          environment-file: ops/conda_env/linux_sycl_cuda_build.yml
+      - name: Build and run C++ tests
+        run: bash ops/pipeline/build-test-sycl-cuda.sh
