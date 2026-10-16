@@ -1,18 +1,28 @@
 /**
- * Copyright 2017-2025, XGBoost contributors
+ * Copyright 2017-2026, XGBoost contributors
+ *
+ * @brief CUDA backend of HostDeviceVector.
  */
 #include <thrust/fill.h>
 
 #include <algorithm>
 #include <cstddef>  // for size_t
 #include <cstdint>
+#include <memory>   // for unique_ptr
+#include <utility>  // for move
+#include <vector>   // for vector
 
 #include "cuda_stream.h"  // for DefaultStream
 #include "device_helpers.cuh"
 #include "device_vector.cuh"  // for DeviceUVector
+#include "host_device_vector_backend.h"
 #include "xgboost/data.h"
 #include "xgboost/host_device_vector.h"
 #include "xgboost/tree_model.h"  // for RegTree
+
+#if defined(XGBOOST_USE_SYCL)
+#include "../../plugin/sycl/predictor/node.h"  // for Node
+#endif                                         // defined(XGBOOST_USE_SYCL)
 
 namespace xgboost {
 
@@ -21,10 +31,12 @@ static void (*cudaSetDeviceHandler)(int) = nullptr;  // NOLINT
 
 void SetCudaSetDeviceHandler(void (*handler)(int)) { cudaSetDeviceHandler = handler; }
 
+namespace common::cuda_impl {
 template <typename T>
-class HostDeviceVectorImpl {
+class HDVBackendCuda : public HDVBackend<T> {
  public:
-  HostDeviceVectorImpl(size_t size, T v, DeviceOrd device) : device_(device) {
+  HDVBackendCuda(std::vector<T>* h_data, size_t size, T v, DeviceOrd device)
+      : device_(device), data_h_{*h_data} {
     if (device.IsCUDA()) {
       gpu_access_ = GPUAccess::kWrite;
       SetDevice();
@@ -34,57 +46,54 @@ class HostDeviceVectorImpl {
     }
   }
 
-  // Initializer can be std::vector<T> or std::initializer_list<T>
-  template <class Initializer>
-  HostDeviceVectorImpl(const Initializer& init, DeviceOrd device) : device_(device) {
+  HDVBackendCuda(std::vector<T>* h_data, Span<T const> init, DeviceOrd device)
+      : device_(device), data_h_{*h_data} {
     if (device.IsCUDA()) {
       gpu_access_ = GPUAccess::kWrite;
       LazyResizeDevice(init.size());
       Copy(init);
     } else {
-      data_h_ = init;
+      data_h_.assign(init.cbegin(), init.cend());
     }
   }
 
-  HostDeviceVectorImpl(HostDeviceVectorImpl<T>&& that)
-      : device_{that.device_},
-        data_h_{std::move(that.data_h_)},
-        data_d_{std::move(that.data_d_)},
-        gpu_access_{that.gpu_access_} {}
+  HDVBackendCuda(std::vector<T>* h_data, DeviceOrd device) : data_h_{*h_data} { SetDevice(device); }
 
-  ~HostDeviceVectorImpl() {
+  ~HDVBackendCuda() override {
     if (device_.IsCUDA()) {
       SetDevice();
     }
   }
 
-  [[nodiscard]] size_t Size() const {
+  [[nodiscard]] HDVBackendKind Kind() const override { return HDVBackendKind::kCUDA; }
+
+  [[nodiscard]] size_t Size() const override {
     return HostCanRead() ? data_h_.size() : data_d_ ? data_d_->size() : 0;
   }
 
-  [[nodiscard]] DeviceOrd Device() const { return device_; }
+  [[nodiscard]] DeviceOrd Device() const override { return device_; }
 
-  T* DevicePointer() {
+  T* DevicePointer() override {
     LazySyncDevice(GPUAccess::kWrite);
     return data_d_->data();
   }
 
-  const T* ConstDevicePointer() {
+  const T* ConstDevicePointer() override {
     LazySyncDevice(GPUAccess::kRead);
     return data_d_->data();
   }
 
-  common::Span<T> DeviceSpan() {
+  common::Span<T> DeviceSpan() override {
     LazySyncDevice(GPUAccess::kWrite);
     return {this->DevicePointer(), Size()};
   }
 
-  common::Span<const T> ConstDeviceSpan() {
+  common::Span<const T> ConstDeviceSpan() override {
     LazySyncDevice(GPUAccess::kRead);
     return {this->ConstDevicePointer(), Size()};
   }
 
-  void Fill(T v) {  // NOLINT
+  void Fill(T v) override {  // NOLINT
     if (HostCanWrite()) {
       std::fill(data_h_.begin(), data_h_.end(), v);
     } else {
@@ -96,7 +105,8 @@ class HostDeviceVectorImpl {
     }
   }
 
-  void Copy(HostDeviceVectorImpl<T>* other) {
+  void Copy(HDVBackend<T>* that) override {
+    auto* other = static_cast<HDVBackendCuda<T>*>(that);
     CHECK_EQ(Size(), other->Size());
     SetDevice(other->device_);
     // Data is on host.
@@ -108,25 +118,17 @@ class HostDeviceVectorImpl {
     CopyToDevice(other);
   }
 
-  void Copy(const std::vector<T>& other) {
+  void Copy(Span<T const> other) override {
     CHECK_EQ(Size(), other.size());
     if (HostCanWrite()) {
-      std::copy(other.begin(), other.end(), data_h_.begin());
+      std::copy(other.cbegin(), other.cend(), data_h_.begin());
     } else {
       CopyToDevice(other.data());
     }
   }
 
-  void Copy(std::initializer_list<T> other) {
-    CHECK_EQ(Size(), other.size());
-    if (HostCanWrite()) {
-      std::copy(other.begin(), other.end(), data_h_.begin());
-    } else {
-      CopyToDevice(other.begin());
-    }
-  }
-
-  void Extend(HostDeviceVectorImpl* other) {
+  void Extend(HDVBackend<T>* that) override {
+    auto* other = static_cast<HDVBackendCuda<T>*>(that);
     auto ori_size = this->Size();
     this->Resize(ori_size + other->Size(), T{});
     if (HostCanWrite() && other->HostCanRead()) {
@@ -144,17 +146,17 @@ class HostDeviceVectorImpl {
     }
   }
 
-  std::vector<T>& HostVector() {
+  std::vector<T>& HostVector() override {
     LazySyncHost(GPUAccess::kNone);
     return data_h_;
   }
 
-  const std::vector<T>& ConstHostVector() {
+  const std::vector<T>& ConstHostVector() override {
     LazySyncHost(GPUAccess::kRead);
     return data_h_;
   }
 
-  void SetDevice(DeviceOrd device) {
+  void SetDevice(DeviceOrd device) override {
     if (device_ == device) {
       return;
     }
@@ -172,8 +174,27 @@ class HostDeviceVectorImpl {
     }
   }
 
+  void Resize(std::size_t new_size) override { this->ResizeImpl(new_size); }
+  void Resize(std::size_t new_size, T v) override { this->ResizeImpl(new_size, v); }
+
+  void SyncToHost() override { LazySyncHost(GPUAccess::kNone); }
+
+  [[nodiscard]] bool HostCanAccess(GPUAccess access) const { return gpu_access_ <= access; }
+  [[nodiscard]] bool HostCanRead() const { return HostCanAccess(GPUAccess::kRead); }
+  [[nodiscard]] bool HostCanWrite() const { return HostCanAccess(GPUAccess::kNone); }
+  [[nodiscard]] bool DeviceCanAccess(GPUAccess access) const { return gpu_access_ >= access; }
+  [[nodiscard]] bool DeviceCanRead() const { return DeviceCanAccess(GPUAccess::kRead); }
+  [[nodiscard]] bool DeviceCanWrite() const { return DeviceCanAccess(GPUAccess::kWrite); }
+  [[nodiscard]] GPUAccess Access() const override { return gpu_access_; }
+
+ private:
+  DeviceOrd device_{DeviceOrd::CPU()};
+  std::vector<T>& data_h_;
+  std::unique_ptr<dh::DeviceUVector<T>> data_d_{};
+  GPUAccess gpu_access_{GPUAccess::kNone};
+
   template <typename... U>
-  auto Resize(std::size_t new_size, U&&... args) {
+  void ResizeImpl(std::size_t new_size, U&&... args) {
     if (new_size == Size()) {
       return;
     }
@@ -224,21 +245,7 @@ class HostDeviceVectorImpl {
     gpu_access_ = access;
   }
 
-  [[nodiscard]] bool HostCanAccess(GPUAccess access) const { return gpu_access_ <= access; }
-  [[nodiscard]] bool HostCanRead() const { return HostCanAccess(GPUAccess::kRead); }
-  [[nodiscard]] bool HostCanWrite() const { return HostCanAccess(GPUAccess::kNone); }
-  [[nodiscard]] bool DeviceCanAccess(GPUAccess access) const { return gpu_access_ >= access; }
-  [[nodiscard]] bool DeviceCanRead() const { return DeviceCanAccess(GPUAccess::kRead); }
-  [[nodiscard]] bool DeviceCanWrite() const { return DeviceCanAccess(GPUAccess::kWrite); }
-  [[nodiscard]] GPUAccess Access() const { return gpu_access_; }
-
- private:
-  DeviceOrd device_{DeviceOrd::CPU()};
-  std::vector<T> data_h_{};
-  std::unique_ptr<dh::DeviceUVector<T>> data_d_{};
-  GPUAccess gpu_access_{GPUAccess::kNone};
-
-  void CopyToDevice(HostDeviceVectorImpl* other) {
+  void CopyToDevice(HDVBackendCuda* other) {
     if (other->HostCanWrite()) {
       CopyToDevice(other->data_h_.data());
     } else {
@@ -282,170 +289,24 @@ class HostDeviceVectorImpl {
 };
 
 template <typename T>
-HostDeviceVector<T>::HostDeviceVector(size_t size, T v, DeviceOrd device)
-    : impl_(new HostDeviceVectorImpl<T>(size, v, device)) {}
-
-template <typename T>
-HostDeviceVector<T>::HostDeviceVector(std::initializer_list<T> init, DeviceOrd device)
-    : impl_(new HostDeviceVectorImpl<T>(init, device)) {}
-
-template <typename T>
-HostDeviceVector<T>::HostDeviceVector(const std::vector<T>& init, DeviceOrd device)
-    : impl_(new HostDeviceVectorImpl<T>(init, device)) {}
-
-template <typename T>
-HostDeviceVector<T>::HostDeviceVector(HostDeviceVector<T>&& other)
-    : impl_(new HostDeviceVectorImpl<T>(std::move(*other.impl_))) {}
-
-template <typename T>
-HostDeviceVector<T>& HostDeviceVector<T>::operator=(HostDeviceVector<T>&& other) {
-  if (this == &other) {
-    return *this;
-  }
-
-  std::unique_ptr<HostDeviceVectorImpl<T>> new_impl(
-      new HostDeviceVectorImpl<T>(std::move(*other.impl_)));
-  delete impl_;
-  impl_ = new_impl.release();
-  return *this;
+std::unique_ptr<HDVBackend<T>> MakeHDV(std::vector<T>* h_data, std::size_t size, T v,
+                                       DeviceOrd device) {
+  return std::make_unique<HDVBackendCuda<T>>(h_data, size, v, device);
 }
 
 template <typename T>
-HostDeviceVector<T>::~HostDeviceVector() {
-  delete impl_;
-  impl_ = nullptr;
+std::unique_ptr<HDVBackend<T>> MakeHDV(std::vector<T>* h_data, Span<T const> init,
+                                       DeviceOrd device) {
+  return std::make_unique<HDVBackendCuda<T>>(h_data, init, device);
 }
 
 template <typename T>
-size_t HostDeviceVector<T>::Size() const {
-  return impl_->Size();
+std::unique_ptr<HDVBackend<T>> AdoptHostHDV(std::vector<T>* h_data, DeviceOrd device) {
+  return std::make_unique<HDVBackendCuda<T>>(h_data, device);
 }
-
-template <typename T>
-DeviceOrd HostDeviceVector<T>::Device() const {
-  return impl_->Device();
-}
-
-template <typename T>
-T* HostDeviceVector<T>::DevicePointer() {
-  return impl_->DevicePointer();
-}
-
-template <typename T>
-const T* HostDeviceVector<T>::ConstDevicePointer() const {
-  return impl_->ConstDevicePointer();
-}
-
-template <typename T>
-common::Span<T> HostDeviceVector<T>::DeviceSpan() {
-  return impl_->DeviceSpan();
-}
-
-template <typename T>
-common::Span<const T> HostDeviceVector<T>::ConstDeviceSpan() const {
-  return impl_->ConstDeviceSpan();
-}
-
-template <typename T>
-void HostDeviceVector<T>::Fill(T v) {
-  impl_->Fill(v);
-}
-
-template <typename T>
-void HostDeviceVector<T>::Copy(const HostDeviceVector<T>& other) {
-  impl_->Copy(other.impl_);
-}
-
-template <typename T>
-void HostDeviceVector<T>::Copy(const std::vector<T>& other) {
-  impl_->Copy(other);
-}
-
-template <typename T>
-void HostDeviceVector<T>::Copy(std::initializer_list<T> other) {
-  impl_->Copy(other);
-}
-
-template <typename T>
-void HostDeviceVector<T>::Extend(HostDeviceVector const& other) {
-  impl_->Extend(other.impl_);
-}
-
-template <typename T>
-std::vector<T>& HostDeviceVector<T>::HostVector() {
-  return impl_->HostVector();
-}
-
-template <typename T>
-const std::vector<T>& HostDeviceVector<T>::ConstHostVector() const {
-  return impl_->ConstHostVector();
-}
-
-template <typename T>
-bool HostDeviceVector<T>::HostCanRead() const {
-  return impl_->HostCanRead();
-}
-
-template <typename T>
-bool HostDeviceVector<T>::HostCanWrite() const {
-  return impl_->HostCanWrite();
-}
-
-template <typename T>
-bool HostDeviceVector<T>::DeviceCanRead() const {
-  return impl_->DeviceCanRead();
-}
-
-template <typename T>
-bool HostDeviceVector<T>::DeviceCanWrite() const {
-  return impl_->DeviceCanWrite();
-}
-
-template <typename T>
-GPUAccess HostDeviceVector<T>::DeviceAccess() const {
-  return impl_->Access();
-}
-
-template <typename T>
-void HostDeviceVector<T>::SetDevice(DeviceOrd device) const {
-  impl_->SetDevice(device);
-}
-
-template <typename T>
-void HostDeviceVector<T>::Resize(std::size_t new_size) {
-  impl_->Resize(new_size);
-}
-
-template <typename T>
-void HostDeviceVector<T>::Resize(std::size_t new_size, T v) {
-  impl_->Resize(new_size, v);
-}
-
-// explicit instantiations are required, as HostDeviceVector isn't header-only
-template class HostDeviceVector<bst_float>;
-template class HostDeviceVector<double>;
-template class HostDeviceVector<GradientPair>;
-template class HostDeviceVector<GradientPairPrecise>;
-template class HostDeviceVector<GradientPairInt64>;
-template class HostDeviceVector<std::int32_t>;  // bst_node_t
-template class HostDeviceVector<std::uint8_t>;
-template class HostDeviceVector<std::int8_t>;
-template class HostDeviceVector<FeatureType>;
-template class HostDeviceVector<Entry>;
-template class HostDeviceVector<bst_idx_t>;
-template class HostDeviceVector<std::uint32_t>;  // bst_feature_t
-template class HostDeviceVector<RegTree::Node>;
-template class HostDeviceVector<RegTree::CategoricalSplitMatrix::Segment>;
-template class HostDeviceVector<RTreeNodeStat>;
-
-#if defined(__APPLE__)
-/*
- * On OSX:
- *
- * typedef unsigned int         uint32_t;
- * typedef unsigned long long   uint64_t;
- * typedef unsigned long       __darwin_size_t;
- */
-template class HostDeviceVector<std::size_t>;
-#endif  // defined(__APPLE__)
+}  // namespace common::cuda_impl
 }  // namespace xgboost
+
+#define XGBOOST_HDV_INSTANTIATE(T) XGBOOST_HDV_INSTANTIATE_FACTORIES(xgboost::common::cuda_impl, T)
+XGBOOST_HDV_FOR_EACH_TYPE(XGBOOST_HDV_INSTANTIATE)
+#undef XGBOOST_HDV_INSTANTIATE
