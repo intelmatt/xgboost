@@ -36,3 +36,16 @@ From the ``xgboost`` directory, run:
 $ cmake -B build -S . -DPLUGIN_SYCL=ON
 $ cmake --build build -j
 ```
+
+Only the plugin sources are compiled by the SYCL compiler. The rest of XGBoost is compiled and
+linked by the regular C++ compiler (``CMAKE_CXX_COMPILER``). CMake 3.19 or newer is required.
+
+| CMake option | Default | Description |
+| --- | --- | --- |
+| ``SYCL_CXX_COMPILER`` | ``icpx`` | SYCL compiler, a name in ``PATH`` or a full path. |
+| ``SYCL_CXX_FLAGS`` | empty | Additional flags for the SYCL compiler only, e.g. ``--gcc-toolchain=<path>``. |
+
+The SYCL runtime library (``libsycl``) is looked up next to the compiler (``<bin>/../lib``) and
+becomes a load-time dependency of ``libxgboost``. Intel compiler runtime libraries are not linked
+(``-no-intel-lib``). SYCL devices additionally need the oneAPI Unified Runtime adapters and their
+dependencies at run time; ``sycl-ls --verbose`` shows why an adapter fails to load.
