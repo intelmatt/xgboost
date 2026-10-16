@@ -1,9 +1,5 @@
 cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
 
-if(PLUGIN_SYCL)
-  string(REPLACE " -isystem ${CONDA_PREFIX}/include" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-endif()
-
 project(xgboost LANGUAGES CXX C VERSION 3.5.0)
 include(cmake/Utils.cmake)
 list(APPEND CMAKE_MODULE_PATH "${xgboost_SOURCE_DIR}/cmake/modules")
@@ -111,8 +107,9 @@ set(ENABLED_SANITIZERS "address" "leak" CACHE STRING
 address, leak, undefined and thread.")
 ## Plugins
 option(PLUGIN_RMM "Build with RAPIDS Memory Manager (RMM)" OFF)
-## TODO: 1. Add check if DPC++ compiler is used for building
 option(PLUGIN_SYCL "SYCL plugin" OFF)
+set(SYCL_CXX_COMPILER "icpx" CACHE STRING "SYCL compiler used for the SYCL plugin sources")
+set(SYCL_CXX_FLAGS "" CACHE STRING "Extra flags for the SYCL compiler")
 option(ADD_PKGCONFIG "Add xgboost.pc into system." ON)
 
 #-- Checks for building XGBoost
@@ -130,6 +127,15 @@ if(USE_NVTX)
 endif()
 if(USE_NCCL AND (NOT USE_CUDA))
   message(SEND_ERROR "`USE_NCCL` must be enabled with `USE_CUDA` flag.")
+endif()
+if(PLUGIN_SYCL AND (CMAKE_VERSION VERSION_LESS "3.19.0"))
+  message(SEND_ERROR "cmake >= 3.19 is required for `PLUGIN_SYCL`.")
+endif()
+if(PLUGIN_SYCL)
+  find_program(SYCL_CXX_COMPILER_PATH NAMES ${SYCL_CXX_COMPILER} REQUIRED)
+  get_filename_component(sycl_compiler_bin_dir ${SYCL_CXX_COMPILER_PATH} DIRECTORY)
+  find_library(SYCL_LIBRARY sycl HINTS ${sycl_compiler_bin_dir}/../lib REQUIRED)
+  message(STATUS "SYCL compiler: ${SYCL_CXX_COMPILER_PATH}, SYCL runtime: ${SYCL_LIBRARY}")
 endif()
 if(USE_DEVICE_DEBUG AND (NOT USE_CUDA))
   message(SEND_ERROR "`USE_DEVICE_DEBUG` must be enabled with `USE_CUDA` flag.")
@@ -386,15 +392,6 @@ elseif(USE_CUDA)
   if(WIN32)
     target_compile_definitions(CCCL::CCCL INTERFACE NOMINMAX WIN32_LEAN_AND_MEAN _WINSOCKAPI_)
   endif()
-endif()
-
-if(PLUGIN_SYCL)
-  set(CMAKE_CXX_LINK_EXECUTABLE
-      "icpx <FLAGS> <CMAKE_CXX_LINK_FLAGS> -qopenmp <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>")
-  set(CMAKE_CXX_CREATE_SHARED_LIBRARY
-      "icpx -shared <CMAKE_SHARED_LIBRARY_CXX_FLAGS> -qopenmp <LANGUAGE_COMPILE_FLAGS> \
-      <CMAKE_SHARED_LIBRARY_CREATE_CXX_FLAGS> <SONAME_FLAG>,<TARGET_SONAME> \
-      -o <TARGET> <OBJECTS> <LINK_LIBRARIES>")
 endif()
 
 #-- library

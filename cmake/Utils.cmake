@@ -225,6 +225,34 @@ function(xgboost_link_nccl target)
   endif()
 endfunction()
 
+# Compile a SYCL object library with SYCL_CXX_COMPILER and create `<target>_device_link`, an
+# INTERFACE library that carries its device image and the SYCL runtime to the final link. The
+# caller must set CMAKE_CXX_COMPILER to SYCL_CXX_COMPILER_PATH in the directory of the target.
+function(xgboost_sycl_object_library target)
+  separate_arguments(sycl_flags UNIX_COMMAND "${SYCL_CXX_FLAGS}")
+  # The final link is done by the host compiler, which does not link the Intel runtime libraries.
+  target_compile_options(${target} PRIVATE -fsycl -no-intel-lib ${sycl_flags})
+  set_target_properties(${target} PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON)
+
+  set(device_link ${CMAKE_CURRENT_BINARY_DIR}/${target}_device_link.o)
+  add_custom_command(
+    OUTPUT ${device_link}
+    COMMAND ${SYCL_CXX_COMPILER_PATH} ${sycl_flags} -fsycl -fsycl-link -fPIC
+            $<TARGET_OBJECTS:${target}> -o ${device_link}
+    DEPENDS $<TARGET_OBJECTS:${target}>
+    COMMENT "Linking SYCL device code of ${target}"
+    COMMAND_EXPAND_LISTS
+    VERBATIM)
+  add_custom_target(${target}_device_link_gen DEPENDS ${device_link})
+  add_dependencies(${target}_device_link_gen ${target})
+  add_library(${target}_device_link INTERFACE)
+  target_link_libraries(${target}_device_link INTERFACE ${device_link} ${SYCL_LIBRARY})
+  add_dependencies(${target}_device_link ${target}_device_link_gen)
+endfunction()
+
 # compile options
 macro(xgboost_target_properties target)
   set_target_properties(${target} PROPERTIES

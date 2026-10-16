@@ -16,7 +16,7 @@ file(GLOB_RECURSE SYCL_TEST_SOURCES "plugin/test_sycl_*.cc")
 list(REMOVE_ITEM TEST_SOURCES ${SYCL_TEST_SOURCES})
 
 if(PLUGIN_SYCL)
-  set(CMAKE_CXX_COMPILER "icpx")
+  set(CMAKE_CXX_COMPILER "${SYCL_CXX_COMPILER_PATH}")
   file(GLOB_RECURSE SYCL_TEST_SOURCES "plugin/test_sycl_*.cc")
   add_library(plugin_sycl_test OBJECT ${SYCL_TEST_SOURCES})
 
@@ -27,21 +27,10 @@ if(PLUGIN_SYCL)
     ${xgboost_SOURCE_DIR}/dmlc-core/include)
 
   target_compile_definitions(plugin_sycl_test PUBLIC -DXGBOOST_USE_SYCL=1)
-  target_link_libraries(plugin_sycl_test PUBLIC -fsycl)
   target_link_libraries(plugin_sycl_test PRIVATE GTest::gtest GTest::gmock)
-
-  set_target_properties(plugin_sycl_test PROPERTIES
-    COMPILE_FLAGS -fsycl
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-    POSITION_INDEPENDENT_CODE ON)
-  if(USE_OPENMP)
-    find_package(OpenMP REQUIRED)
-    set_target_properties(plugin_sycl_test PROPERTIES
-    COMPILE_FLAGS "-fsycl -qopenmp")
-  endif()
-  # Get compilation and link flags of plugin_sycl and propagate to testxgboost
-  target_link_libraries(testxgboost PUBLIC plugin_sycl_test)
+  xgboost_sycl_object_library(plugin_sycl_test)
+  # Get compilation flags of plugin_sycl_test and propagate to testxgboost
+  target_link_libraries(testxgboost PUBLIC plugin_sycl_test plugin_sycl_test_device_link)
   # Add all objects of plugin_sycl to testxgboost
   target_sources(testxgboost INTERFACE $<TARGET_OBJECTS:plugin_sycl_test>)
 endif()
