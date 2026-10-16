@@ -798,7 +798,10 @@ void MetaInfo::SynchronizeNumberOfColumns(Context const* ctx) {
 namespace {
 template <typename T>
 void CheckDevice(DeviceOrd device, HostDeviceVector<T> const& v) {
-  bool valid = v.Device().IsCPU() || device.IsCPU() || v.Device() == device;
+  // Moving data between CUDA and SYCL goes through the host, only a different device of the same
+  // backend is rejected.
+  bool same_backend = v.Device().IsCUDA() == device.IsCUDA();
+  bool valid = v.Device().IsCPU() || device.IsCPU() || v.Device() == device || !same_backend;
   if (!valid) {
     LOG(FATAL) << "Invalid device ordinal. Data is associated with a different device ordinal than "
                   "the booster. The device ordinal of the data is: "

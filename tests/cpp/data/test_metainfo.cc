@@ -253,6 +253,10 @@ TEST(MetaInfo, Validate) {
   info.SetInfo(ctx, "label", Make1dInterfaceTest(labels.data(), info.num_row_));
   info.labels.SetDevice(FstCU());
   EXPECT_THROW(info.Validate(DeviceOrd::CUDA(1)), dmlc::Error);
+#if defined(XGBOOST_USE_SYCL)
+  // The data can be moved between CUDA and SYCL devices.
+  EXPECT_NO_THROW(info.Validate(DeviceOrd::SyclCPU()));
+#endif  // defined(XGBOOST_USE_SYCL)
 
   xgboost::HostDeviceVector<xgboost::bst_group_t> d_groups{groups};
   d_groups.SetDevice(FstCU());
