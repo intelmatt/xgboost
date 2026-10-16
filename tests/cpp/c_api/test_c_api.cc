@@ -350,6 +350,11 @@ TEST(CAPI, BuildInfo) {
   ASSERT_TRUE(get<Object const>(loaded).find("USE_OPENMP") != get<Object const>(loaded).cend());
   ASSERT_TRUE(get<Object const>(loaded).find("USE_CUDA") != get<Object const>(loaded).cend());
   ASSERT_TRUE(get<Object const>(loaded).find("USE_NCCL") != get<Object const>(loaded).cend());
+#if defined(XGBOOST_USE_SYCL)
+  ASSERT_TRUE(get<Boolean const>(loaded["USE_SYCL"]));
+#else
+  ASSERT_FALSE(get<Boolean const>(loaded["USE_SYCL"]));
+#endif  // defined(XGBOOST_USE_SYCL)
 }
 
 TEST(CAPI, NullPtr) {

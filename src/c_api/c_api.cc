@@ -140,6 +140,12 @@ XGB_DLL int XGBuildInfo(char const **out) {
   info["GIT_HASH"] = String{git_hash};
 #endif
 
+#if defined(XGBOOST_USE_SYCL)
+  info["USE_SYCL"] = Boolean{true};
+#else
+  info["USE_SYCL"] = Boolean{false};
+#endif  // defined(XGBOOST_USE_SYCL)
+
   XGBBuildInfoDevice(&info);
 
   auto &out_str = GlobalConfigAPIThreadLocalStore::Get()->ret_str;
