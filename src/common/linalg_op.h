@@ -129,10 +129,10 @@ auto end(TensorView<T, D>& v) {  // NOLINT
 
 namespace detail {
 using SysTagImpl = std::int32_t;
-// Magic for complying with the ODR.
+// Magic for complying with the ODR. The tag identifies the compiler of the TU, not the build.
 #if defined(__CUDACC__)
 constexpr SysTagImpl SysTag() { return 0; }
-#elif defined(XGBOOST_USE_SYCL)
+#elif defined(SYCL_LANGUAGE_VERSION)
 constexpr SysTagImpl SysTag() { return 1; }
 #else
 constexpr SysTagImpl SysTag() { return 2; }
