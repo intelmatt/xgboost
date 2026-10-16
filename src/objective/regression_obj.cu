@@ -39,6 +39,13 @@ namespace {
 template <typename Fn, typename Chk = common::NoOp<bool>, typename Err = common::NoOp<StringView>>
 void ProbToMarginImpl(Context const* ctx, linalg::Vector<float>* base_score, Fn&& fn,
                       Chk check = common::NoOp{true}, Err error = common::NoOp<StringView>{{}}) {
+#if defined(XGBOOST_USE_SYCL) && !defined(SYCL_LANGUAGE_VERSION)
+  // SYCL kernels are not available in this TU, run on the host instead.
+  auto cpu_ctx = ctx->MakeCPU();
+  if (ctx->IsSycl()) {
+    ctx = &cpu_ctx;
+  }
+#endif  // defined(XGBOOST_USE_SYCL) && !defined(SYCL_LANGUAGE_VERSION)
   auto intercept = base_score->View(ctx->Device());
   bool is_valid = ctx->DispatchDevice(
       [&] { return std::all_of(linalg::cbegin(intercept), linalg::cend(intercept), check); },
@@ -52,12 +59,12 @@ void ProbToMarginImpl(Context const* ctx, linalg::Vector<float>* base_score, Fn&
 #endif  // defined(XGBOOST_USE_CUDA)
       },
       [&] {
-#if defined(XGBOOST_USE_SYCL)
+#if defined(SYCL_LANGUAGE_VERSION)
         return sycl::linalg::Validate(ctx->Device(), intercept, check);
 #else
         common::AssertSYCLSupport();
         return false;
-#endif  // defined(XGBOOST_USE_SYCL)
+#endif  // defined(SYCL_LANGUAGE_VERSION)
       });
   CHECK(is_valid) << error();
   linalg::ElementWiseKernel(ctx, intercept, [=] XGBOOST_DEVICE(std::size_t i) mutable {
