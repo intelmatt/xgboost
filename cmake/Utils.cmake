@@ -228,7 +228,21 @@ endfunction()
 # Compile a SYCL object library with SYCL_CXX_COMPILER and create `<target>_device_link`, an
 # INTERFACE library that carries its device image and the SYCL runtime to the final link. The
 # caller must set CMAKE_CXX_COMPILER to SYCL_CXX_COMPILER_PATH in the directory of the target.
-function(xgboost_sycl_object_library target)
+#
+# The objects are linked together with those of `host_target`, so they are compiled with the same
+# preprocessor definitions and include directories (including those from its dependencies such as
+# dmlc, CCCL and NCCL). Inline functions in the headers depend on macros like XGBOOST_USE_CUDA;
+# compiling them differently would violate the one-definition rule.
+function(xgboost_sycl_object_library target host_target)
+  target_compile_definitions(${target} PRIVATE
+    $<TARGET_PROPERTY:${host_target},COMPILE_DEFINITIONS>)
+  target_include_directories(${target} PRIVATE
+    $<TARGET_PROPERTY:${host_target},INCLUDE_DIRECTORIES>)
+  if(USE_CUDA)
+    # With NDEBUG, CCCL declares `__assert_fail` as noexcept. The SYCL headers declare it without
+    # an exception specification, which is only accepted after the CCCL declaration.
+    target_compile_options(${target} PRIVATE -include cuda/std/cassert)
+  endif()
   separate_arguments(sycl_flags UNIX_COMMAND "${SYCL_CXX_FLAGS}")
   # The final link is done by the host compiler, which does not link the Intel runtime libraries.
   target_compile_options(${target} PRIVATE -fsycl -no-intel-lib ${sycl_flags})

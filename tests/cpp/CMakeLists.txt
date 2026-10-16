@@ -28,7 +28,7 @@ if(PLUGIN_SYCL)
 
   target_compile_definitions(plugin_sycl_test PUBLIC -DXGBOOST_USE_SYCL=1)
   target_link_libraries(plugin_sycl_test PRIVATE GTest::gtest GTest::gmock)
-  xgboost_sycl_object_library(plugin_sycl_test)
+  xgboost_sycl_object_library(plugin_sycl_test testxgboost)
   # Get compilation flags of plugin_sycl_test and propagate to testxgboost
   target_link_libraries(testxgboost PUBLIC plugin_sycl_test plugin_sycl_test_device_link)
   # Add all objects of plugin_sycl to testxgboost

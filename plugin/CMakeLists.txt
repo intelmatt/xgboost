@@ -9,7 +9,7 @@ if(PLUGIN_SYCL)
     ${xgboost_SOURCE_DIR}/rabit/include)
     target_compile_definitions(plugin_sycl PUBLIC -DXGBOOST_USE_SYCL=1)
     target_compile_options(plugin_sycl PRIVATE -fno-sycl-id-queries-fit-in-int)
-  xgboost_sycl_object_library(plugin_sycl)
+  xgboost_sycl_object_library(plugin_sycl objxgboost)
   # Get compilation flags of plugin_sycl and propagate to objxgboost
   target_link_libraries(objxgboost PUBLIC plugin_sycl plugin_sycl_device_link)
   # Add all objects of plugin_sycl to objxgboost
